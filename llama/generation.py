@@ -170,19 +170,27 @@ class Llama:
                     reduction="none",
                     ignore_index=pad_id,
                 )
+                print(f"DEBUG: token_logprobs {token_logprobs.size()}")
             if temperature > 0:
                 probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
                 next_token = sample_top_p(probs, top_p)
+                print(f"DEBUG: probs {probs.size()}", probs)
+                print(f"DEBUG: next_token shape {next_token.size()}; next_token", next_token)
+                # print(f"DEBUG: prob of token at next_token {probs[0, next_token[0][0]]}, prob of the first token {probs[0, 0]}")
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
 
             next_token = next_token.reshape(-1)
-            # only replace token if prompt has already been generated
+            print(f"DEBUG: next_token 3 {next_token.size()}", next_token)
+            # only replace token if prompt has already been generate
             next_token = torch.where(
                 input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
             )
+            print(f"DEBUG: next_token 4 {next_token.size()}", next_token)
             tokens[:, cur_pos] = next_token
+            print(f"DEBUG: tokens {tokens.size()}", tokens)
             stop_reached |= (~input_text_mask[:, cur_pos]) & (next_token == stop_token)
+            print(f"DEBUG: stop_reached {stop_reached.size()}", stop_reached)
             prev_pos = cur_pos
             if all(stop_reached):
                 break
@@ -268,6 +276,11 @@ class Llama:
         )
 
         generations = [self.tokenizer.decode_infilling(t) for t in generation_tokens]
+        
+        print("DEBUG: generation_tokens", generation_tokens)
+        
+        print("DEBUG: generations", generations)
+        print("DEBUG: decoded tokens", [self.tokenizer.decode(t) for t in generation_tokens])
 
         if logprobs:
             assert generation_logprobs is not None
@@ -460,15 +473,24 @@ class Llama:
 
 
 
-def sample_top_p(probs, p):
+def sample_top_p(probs, p, max_sample=5):
+    # p = 0.99
     probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
     probs_sum = torch.cumsum(probs_sort, dim=-1)
     mask = probs_sum - probs_sort > p
     probs_sort[mask] = 0.0
     probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
-    next_token = torch.multinomial(probs_sort, num_samples=1)
-    next_token = torch.gather(probs_idx, -1, next_token)
-    return next_token
+    print(f"DEBUG: probs_sort {probs_sort.size()}", probs_sort)
+    # we rather want to get a list of potential next token candidates
+    num_non_zero = torch.count_nonzero(probs_sort, dim=-1)
+    num_samples = min(max_sample, num_non_zero[0])
+    next_tokens = torch.multinomial(probs_sort, num_samples=num_samples)
+    print(f"DEBUG: next_tokens 1 {next_tokens.size()}", next_tokens)
+    next_tokens = torch.multinomial(probs_sort, num_samples=1)
+    next_tokens = torch.gather(probs_idx, -1, next_tokens)
+    print(f"DEBUG: next_tokens 2 {next_tokens.size()}", next_tokens)
+    return next_tokens
+    # return next_tokens[0]
 
 
 def infilling_prompt_tokens(
